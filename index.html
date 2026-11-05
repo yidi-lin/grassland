@@ -6,7 +6,7 @@
 <title>Tall Grass</title>
 <meta name="description" content="A field of soft tall grass swaying in a gentle breeze. Blow it down with the cursor and you might find a small animal hiding there.">
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #4f6b22; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #93ab43; }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
   #msg { position: fixed; left: 0; right: 0; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); margin: 0; padding: 0 16px;
          text-align: center; color: #fff; font: 500 15px system-ui, sans-serif; text-shadow: 0 1px 6px rgba(0,0,0,.5); pointer-events: none; }
@@ -715,9 +715,9 @@ function drawAnimal(c, kind, P) {
   uniform vec2 uRes;
   vec3 finish(vec3 c, float dist){
     // Warm haze toward the far side, a soft vignette, and dither against banding.
-    c = mix(c, vec3(.62, .70, .40), smoothstep(5., 10., dist) * .2);
+    c = mix(c, vec3(.95, .90, .62), smoothstep(5., 11., dist) * .26);
     vec2 q = gl_FragCoord.xy / uRes - .5;
-    c *= 1. - .55 * dot(q, q);
+    c *= 1. - .3 * dot(q, q);
     c += (fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(.06711056, .00583715)))) - .5) / 255.;
     return c;
   }`;
@@ -783,22 +783,24 @@ function drawAnimal(c, kind, P) {
     if (dot(n, V) < 0.) n = -n;
     float diff = .5 + .5 * clamp(dot(n, uSun), 0., 1.);
     float flat_ = smoothstep(.35, 1.3, T);
-    float ao = mix(.45, 1., pow(s, .7));
+    float ao = mix(.56, 1., pow(s, .7));
     ao = mix(ao, 1., flat_ * .8);
     // Standing grass at the edge of a clearing has its side opened to the sky.
     ao = mix(ao, 1., smoothstep(.3, 1., bt.z) * .85);
 
-    vec3 dark = vec3(.06, .12, .025), mid = vec3(.17, .36, .05), lime = vec3(.46, .66, .14), straw = vec3(.80, .78, .36);
+    vec3 dark = vec3(.16, .25, .05), mid = vec3(.38, .58, .11), lime = vec3(.68, .82, .22), straw = vec3(.97, .88, .44);
     vec3 c = mix(dark, mid, smoothstep(0., .55, max(s, flat_ * .6)));
-    c = mix(c, mix(lime, straw, gold), smoothstep(.5, 1., s));
-    c = mix(c, vec3(.72, .74, .42), plume * smoothstep(.66, .82, s) * .7);
-    c *= ao * (diff * .7 + .4) * mix(.55, 1.15, slope);
+    c = mix(c, mix(lime, straw, min(gold * 1.35, 1.)), smoothstep(.5, 1., s));
+    c = mix(c, vec3(.96, .90, .58), plume * smoothstep(.66, .82, s) * .75);
+    c *= ao * (diff * .55 + .58) * mix(.78, 1.12, slope);
+    // Warm summer sunlight over everything.
+    c *= vec3(1.07, 1.01, .84);
     // Grass laid down by wind shows its long sunlit side: the bright bands of a windy field.
     float sheen = flat_ * (.55 + .45 * dot(dir, normalize(uSun.xz)));
-    c += vec3(.85, .86, .40) * sheen * .3 * s * s;
+    c += vec3(1., .93, .52) * sheen * .34 * s * s;
     // Sun shining through the tips.
     float back = pow(max(dot(-V, uSun), 0.), 3.);
-    c += vec3(.85, .75, .3) * back * s * s * .3;
+    c += vec3(1., .86, .4) * back * s * s * .45;
 
     vCol = c;
     vDist = length(pos - uCam);
@@ -840,7 +842,7 @@ function drawAnimal(c, kind, P) {
     vec3 pos = vec3(p.x, terrain(p), p.y);
     float lit = clamp(dot(terrainNormal(p), uSun), 0., 1.);
     // Deep in the grass the ground is dim, with old thatch.
-    vec3 c = mix(vec3(.14, .18, .06), vec3(.27, .28, .12), vn(p * 6.));
+    vec3 c = mix(vec3(.32, .33, .13), vec3(.46, .42, .20), vn(p * 6.));
     vCol = c * (.6 + .5 * lit);
     vDist = length(pos - uCam);
     gl_Position = project(pos);
@@ -876,7 +878,7 @@ function drawAnimal(c, kind, P) {
     if (t.a < .03) discard;
     // Warm light from the low sun, and a little shade down in the grass.
     float shade = mix(.62, 1., smoothstep(.92, .6, vUv.y));
-    vec3 c = t.rgb / t.a * vec3(1.02, .97, .86) * shade;
+    vec3 c = t.rgb / t.a * vec3(1.05, 1., .88) * shade;
     o = vec4(finish(c, vDist) * t.a, t.a);
   }`;
 
@@ -1060,7 +1062,7 @@ function drawAnimal(c, kind, P) {
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.clearColor(.36, .45, .18, 1);
+    gl.clearColor(.58, .66, .26, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
