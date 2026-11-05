@@ -313,9 +313,17 @@ function bird(c, P) {
 
 function drawAnimal(c, kind, P) {
   c.clearRect(0, 0, 256, 256);
+  // The whole body rocks with the stride: nose up pushing off, nose down landing.
+  const rock = { rabbit: .2, cat: .13, dog: .12, sheep: .05, bird: 0 }[kind];
+  const pitch = -Math.cos(TAU * P.ph) * rock * P.run;
+  c.save();
+  c.translate(128, 196);
+  c.rotate(pitch);
+  c.translate(-128, -196);
   if (kind === 'rabbit') rabbit(c, P);
   else if (kind === 'bird') bird(c, P);
   else quadruped(c, kind, P);
+  c.restore();
 }
 
 (() => {
@@ -341,7 +349,7 @@ function drawAnimal(c, kind, P) {
 
   /* ---------- camera: looking down across the field ---------- */
 
-  const PITCH = 50 * Math.PI / 180, DIST = 4.2, FOVY = 42 * Math.PI / 180;
+  const PITCH = 52 * Math.PI / 180, DIST = 6.2, FOVY = 42 * Math.PI / 180;
   const FWD = [0, -Math.sin(PITCH), Math.cos(PITCH)];
   const UP = [0, Math.cos(PITCH), Math.sin(PITCH)];
   const RIGHT = [1, 0, 0];
@@ -477,28 +485,32 @@ function drawAnimal(c, kind, P) {
   addEventListener('pointerup', () => { down = false; }, { passive: true });
   canvas.addEventListener('pointerleave', () => { pointer = lastPointer = null; velX = velZ = 0; });
 
+  let windX = 1, windZ = 0;   // the direction the cursor last blew
   function blow(dt) {
     if (!pointer) return;
     const last = lastPointer || pointer;
     const k = Math.min(1, dt / .07);
-    velX += ((pointer[0] - last[0]) / dt - velX) * k;
-    velZ += ((pointer[1] - last[1]) / dt - velZ) * k;
+    const mx = pointer[0] - last[0], mz = pointer[1] - last[1];
+    velX += (mx / dt - velX) * k;
+    velZ += (mz / dt - velZ) * k;
     lastPointer = pointer;
     const speed = Math.hypot(velX, velZ);
-    // Holding the button is a stronger, wider gust.
-    const gust = Math.min(speed / 2.2 + (down ? .45 : 0), 1);
-    const ux = speed > 1e-4 ? velX / speed : 0, uz = speed > 1e-4 ? velZ / speed : 0;
-    // A moving cursor is a gust that lays grass down along its path and a little outward.
-    // A resting cursor only stirs the grass around it.
-    const radius = (down ? .82 : .6) + .18 * gust;
-    push(pointer[0], pointer[1], radius, (q, f, rx, rz) => {
-      const out = .22 + .45 * gust;
-      const tx = ux * 1.55 * gust + rx * out, tz = uz * 1.55 * gust + rz * out;
-      // Only ever push harder than what's there, so a passing gust doesn't lift grass already down.
-      const want = Math.hypot(tx, tz), have = Math.hypot(grid.bx[q], grid.bz[q]);
-      if (want * f < have * .8) return;
-      bendToward(q, tx, tz, Math.min(1, f * (4 + 10 * gust) * dt));
-    });
+    if (speed > .05) { windX = velX / speed; windZ = velZ / speed; }
+    // Holding the button keeps the wind blowing, harder, in the direction it was going.
+    const gust = Math.min(speed / 2.2 + (down ? .5 : 0), 1);
+    if (gust < .03) return;
+    // The wind blows along the cursor's path, so grass falls the way the cursor went.
+    // Grass already down is turned to follow the new wind, never lifted by it.
+    const radius = (down ? .62 : .45) + .2 * gust;
+    const steps = Math.max(1, Math.min(10, Math.ceil(Math.hypot(mx, mz) / .08)));
+    for (let i = 1; i <= steps; i++) {
+      const cx = last[0] + mx * i / steps, cz = last[1] + mz * i / steps;
+      push(cx, cz, radius, (q, f) => {
+        const have = Math.hypot(grid.bx[q], grid.bz[q]);
+        const want = Math.max(1.6 * gust * Math.min(1, f * 1.8), have);
+        bendToward(q, windX * want, windZ * want, Math.min(1, f * (5 + 12 * gust) * dt / steps * 2));
+      });
+    }
   }
 
   /* ---------- the animals ---------- */
@@ -539,7 +551,7 @@ function drawAnimal(c, kind, P) {
     const a = {
       kind, ...KINDS[kind], x: 0, z: 0, y: 0, state: 'hidden', timer: 0, cool: 1.5,
       dirX: 1, dirZ: 0, v: 0, dest: null, ph: Math.random(), run: 0, alert: 0, crouch: 1, t: Math.random() * 10,
-      face: Math.random() < .5 ? 1 : -1, fly: 0, flap: 0, canvas: c, ctx: c.getContext('2d'), tex: null,
+      face: Math.random() < .5 ? 1 : -1, turn: 1, fly: 0, flap: 0, canvas: c, ctx: c.getContext('2d'), tex: null,
     };
     [a.x, a.z] = freeSpot(null);
     animals.push(a);
@@ -555,11 +567,12 @@ function drawAnimal(c, kind, P) {
       a.face = a.dirX >= 0 ? 1 : -1;
       return;
     }
-    // Run away from the cursor, a little to either side, toward grass still standing.
+    // Run away from the cursor across the field, mostly sideways as you see it, toward grass still standing.
     let best = null, bestScore = -1e9;
-    const away = pointer ? Math.atan2(a.z - pointer[1], a.x - pointer[0]) : Math.random() * 6.28;
+    const side = pointer ? (a.x >= pointer[0] ? 1 : -1) : (Math.random() < .5 ? 1 : -1);
     for (let i = 0; i < 9; i++) {
-      const ang = away + (Math.random() - .5) * 1.7;
+      const sgn = i < 6 ? side : -side;
+      const ang = (sgn > 0 ? 0 : Math.PI) + (Math.random() - .5) * .9;
       const dist = a.flee[0] + Math.random() * (a.flee[1] - a.flee[0]);
       const [x, z] = inField(a.x + Math.cos(ang) * dist, a.z + Math.sin(ang) * dist, 0);
       const real = Math.hypot(x - a.x, z - a.z);
@@ -570,14 +583,24 @@ function drawAnimal(c, kind, P) {
     a.dest = best;
     const d = Math.hypot(best[0] - a.x, best[1] - a.z) || 1;
     a.dirX = (best[0] - a.x) / d; a.dirZ = (best[1] - a.z) / d;
-    if (Math.abs(a.dirX) > .15) a.face = a.dirX > 0 ? 1 : -1;
-    a.state = 'flee';
-    a.timer = 4;
+    a.face = a.dirX >= 0 ? 1 : -1;
+    // Gathers itself for a split second, then springs.
+    a.state = 'launch';
+    a.timer = .14;
+  }
+
+  // How high each animal's body rides above the ground during its stride, in world units.
+  const BOUND = { rabbit: .16, cat: .08, dog: .07, sheep: .035, bird: 0 };
+  function bounce(a) {
+    if (a.kind === 'sheep') return Math.abs(Math.sin(6.2832 * a.ph)) * BOUND.sheep * a.run;
+    return Math.max(0, Math.sin(6.2832 * a.ph)) * BOUND[a.kind] * a.run;
   }
 
   function updateAnimal(a, dt) {
     a.t += dt;
     const ease = (cur, to, rate) => cur + (to - cur) * Math.min(1, dt * rate);
+    // Turning around takes a moment: the side view narrows, then opens the other way.
+    a.turn = ease(a.turn, a.face, 16);
     switch (a.state) {
       case 'hidden': {
         a.crouch = ease(a.crouch, 1, 3);
@@ -598,6 +621,12 @@ function drawAnimal(c, kind, P) {
         a.timer -= dt;
         if (a.timer <= 0) startFlee(a);
         break;
+      case 'launch':
+        a.alert = ease(a.alert, 0, 12);
+        a.crouch = ease(a.crouch, .75, 18);
+        a.timer -= dt;
+        if (a.timer <= 0) { a.state = 'flee'; a.timer = 4; a.v = a.speed * .55; a.ph = .02; }
+        break;
       case 'flee': {
         const left = Math.hypot(a.dest[0] - a.x, a.dest[1] - a.z);
         const target = left < .55 ? a.speed * Math.max(left / .55, .2) : a.speed;
@@ -614,7 +643,9 @@ function drawAnimal(c, kind, P) {
           dx = a.dirX * Math.cos(wob) - a.dirZ * Math.sin(wob);
           dz = a.dirX * Math.sin(wob) + a.dirZ * Math.cos(wob);
         }
-        a.x += dx * a.v * dt; a.z += dz * a.v * dt;
+        // Each stride surges: pushing off, then floating.
+        const surge = 1 + .22 * Math.sin(6.2832 * a.ph);
+        a.x += dx * a.v * surge * dt; a.z += dz * a.v * surge * dt;
         a.ph = (a.ph + a.v / a.stride * dt) % 1;
         // It parts the grass as it runs through.
         push(a.x, a.z, .3, (q, f, rx, rz) => bendToward(q, dx * .9 + rx * .6, dz * .9 + rz * .6, Math.min(1, f * 9 * dt)));
@@ -704,7 +735,8 @@ function drawAnimal(c, kind, P) {
   ${COMMON}
   out vec3 vCol;
   out float vDist;
-  const float SEGS = 5.;
+  out vec2 vBlade;     // across the strand (-1..1), along it (0..1)
+  const float SEGS = 4.;
   void main(){
     float s = float(gl_VertexID >> 1) / SEGS;
     float side = float(gl_VertexID & 1) * 2. - 1.;
@@ -739,7 +771,8 @@ function drawAnimal(c, kind, P) {
     // Blades bend across their flat side, with a little twist.
     vec2 across = vec2(-dir.y, dir.x);
     vec3 wdir = vec3(across.x * cos(tw) - across.y * sin(tw), 0., across.x * sin(tw) + across.y * cos(tw));
-    float w = W * pow(1. - s, .85);
+    // Soft strands: nearly even width with a rounded end, not a spike.
+    float w = W * (1. - .55 * s * s);
     w += plume * W * 1.1 * smoothstep(.66, .82, s) * (1. - smoothstep(.92, 1., s));
     pos += wdir * w * side;
 
@@ -750,10 +783,10 @@ function drawAnimal(c, kind, P) {
     if (dot(n, V) < 0.) n = -n;
     float diff = .5 + .5 * clamp(dot(n, uSun), 0., 1.);
     float flat_ = smoothstep(.35, 1.3, T);
-    float ao = mix(.34, 1., pow(s, .7));
+    float ao = mix(.45, 1., pow(s, .7));
     ao = mix(ao, 1., flat_ * .8);
     // Standing grass at the edge of a clearing has its side opened to the sky.
-    ao = mix(ao, 1., smoothstep(.4, 1.2, bt.z) * .65);
+    ao = mix(ao, 1., smoothstep(.3, 1., bt.z) * .85);
 
     vec3 dark = vec3(.06, .12, .025), mid = vec3(.17, .36, .05), lime = vec3(.46, .66, .14), straw = vec3(.80, .78, .36);
     vec3 c = mix(dark, mid, smoothstep(0., .55, max(s, flat_ * .6)));
@@ -769,10 +802,24 @@ function drawAnimal(c, kind, P) {
 
     vCol = c;
     vDist = length(pos - uCam);
+    vBlade = vec2(side, s);
     gl_Position = project(pos);
   }`;
 
+  // Strands fade at their edges and tips, which (with multisampling) makes the field soft as fur.
   const GRASS_FRAG = `#version 300 es
+  precision highp float;
+  in vec3 vCol;
+  in float vDist;
+  in vec2 vBlade;
+  out vec4 o;
+  ${FINISH}
+  void main(){
+    float a = (1. - smoothstep(.25, 1., abs(vBlade.x))) * (1. - smoothstep(.62, 1., vBlade.y));
+    o = vec4(finish(vCol, vDist), a);
+  }`;
+
+  const GROUND_FRAG_SRC = `#version 300 es
   precision highp float;
   in vec3 vCol;
   in float vDist;
@@ -799,7 +846,7 @@ function drawAnimal(c, kind, P) {
     gl_Position = project(pos);
   }`;
 
-  const GROUND_FRAG = GRASS_FRAG;
+  const GROUND_FRAG = GROUND_FRAG_SRC;
 
   const ANIMAL_VERT = `#version 300 es
   precision highp float;
@@ -811,7 +858,7 @@ function drawAnimal(c, kind, P) {
   void main(){
     vec2 c = vec2(gl_VertexID & 1, gl_VertexID >> 1);
     // The sprite's ground line sits on the ground.
-    vec3 pos = uPos + uSide * (c.x - .5) * uSize + uLift * (c.y - 20. / 256.) * uSize;
+    vec3 pos = uPos + uSide * (c.x - .5) * uSize * max(abs(uFlip), .12) + uLift * (c.y - 20. / 256.) * uSize;
     vUv = vec2(uFlip > 0. ? c.x : 1. - c.x, 1. - c.y);
     vDist = length(pos - uCam);
     gl_Position = project(pos);
@@ -884,11 +931,11 @@ function drawAnimal(c, kind, P) {
       const gy = groundAt(x, z);
       // Tall where the soil is good, shorter in places, with a few feathery seed heads.
       const H = .34 + .36 * vn(x * .8 + 3.1, z * .8 + 3.1) + .08 * vn(x * 3.1, z * 3.1) + .06 * Math.random();
-      const W = .0085 + .0065 * Math.random();
+      const W = .013 + .009 * Math.random();
       // Big swathes lie in slightly different directions and amounts, like a field after a long wind.
       const swath = vn(x * .55 + 7.7, z * .55 + 7.7), swath2 = vn(x * .9 - 2.3, z * .9 - 2.3);
-      const la = windAng + (swath - .5) * 1.5 + (Math.random() - .5) * 1.1;
-      const lean = .22 + .62 * swath2 * swath2 + .3 * Math.random();
+      const la = windAng + (swath - .5) * 1.0 + (Math.random() - .5) * .45;
+      const lean = .34 + .55 * swath2 * swath2 + .2 * Math.random();
       const gold = Math.min(1, Math.max(0, (vn(x * .55 + 11, z * .55 + 11) - .5) / .45)) ** 2 * .5 + .15 * Math.random();
       // Slopes facing the sun are brighter.
       const e = .04, nx = -(groundAt(x + e, z) - gy) / e, nz = -(groundAt(x, z + e) - gy) / e, nl = Math.hypot(nx, 1, nz);
@@ -968,7 +1015,7 @@ function drawAnimal(c, kind, P) {
 
   /* ---------- sizing and quality ---------- */
 
-  const DENSITY = 5800;     // blades per square unit at full quality
+  const DENSITY = 4200;     // blades per square unit at full quality
   let quality = 1, renderScale = 1, bladeCount = 0, fullCount = 0, built = false;
   function sizeCanvas() {
     const w = Math.max(1, innerWidth), h = Math.max(1, innerHeight);
@@ -981,7 +1028,7 @@ function drawAnimal(c, kind, P) {
     fitView();
     makeGrid();
     const area = (field.halfNear + field.halfFar) * (field.zFar - field.zNear);
-    fullCount = Math.min(Math.round(area * DENSITY), 230000);
+    fullCount = Math.min(Math.round(area * DENSITY), 250000);
     bladeCount = Math.round(fullCount * quality);
     sizeCanvas();
     for (const a of animals) {
@@ -1037,7 +1084,9 @@ function drawAnimal(c, kind, P) {
     gl.bindTexture(gl.TEXTURE_2D, bendTex);
     gl.uniform1i(g.u.uBend, 0);
     gl.bindVertexArray(grassVao);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 12, bladeCount);
+    gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 10, bladeCount);
+    gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
     gl.bindVertexArray(null);
 
     // Animals: flat cards standing in the grass, leaning a little toward you so they read clearly.
@@ -1060,9 +1109,9 @@ function drawAnimal(c, kind, P) {
       // Smaller copies keep thin lines like a cat's tail whole when the animal is drawn small.
       gl.generateMipmap(gl.TEXTURE_2D);
       gl.uniform1i(m.u.uTex, 0);
-      gl.uniform3f(m.u.uPos, a.x, groundAt(a.x, a.z) + a.y, a.z);
+      gl.uniform3f(m.u.uPos, a.x, groundAt(a.x, a.z) + a.y + bounce(a), a.z);
       gl.uniform1f(m.u.uSize, a.size);
-      gl.uniform1f(m.u.uFlip, a.face);
+      gl.uniform1f(m.u.uFlip, a.turn);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
