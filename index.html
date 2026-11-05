@@ -1,0 +1,1108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Tall Grass</title>
+<meta name="description" content="A field of soft tall grass swaying in a gentle breeze. Blow it down with the cursor and you might find a small animal hiding there.">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #4f6b22; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #msg { position: fixed; left: 0; right: 0; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); margin: 0; padding: 0 16px;
+         text-align: center; color: #fff; font: 500 15px system-ui, sans-serif; text-shadow: 0 1px 6px rgba(0,0,0,.5); pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="field" aria-label="A field of tall soft grass swaying in a gentle breeze. Moving the cursor blows the grass down; holding the button parts it. Small animals hide in the grass and run off when uncovered."></canvas>
+<p id="msg"></p>
+<script>
+// Minimal flat silhouettes, drawn fresh each frame so their poses move naturally.
+// Every animal faces right, on a 256 px square, standing on the line y = GROUND.
+// The pose: ph (gait phase 0..1), run (0 still .. 1 full speed), alert (0..1, looking at you),
+// crouch (0..1, hiding low), t (seconds, for small idle motions), fly and flap for the bird.
+
+const TAU = Math.PI * 2;
+const GROUND = 236;
+const lerp = (a, b, k) => a + (b - a) * k;
+
+function ell(c, x, y, rx, ry, rot = 0) {
+  c.beginPath();
+  c.ellipse(x, y, Math.max(rx, .1), Math.max(ry, .1), rot, 0, TAU);
+  c.fill();
+}
+function line(c, pts, w) {
+  c.lineWidth = w;
+  c.lineCap = 'round';
+  c.lineJoin = 'round';
+  c.beginPath();
+  c.moveTo(pts[0], pts[1]);
+  for (let i = 2; i < pts.length; i += 2) c.lineTo(pts[i], pts[i + 1]);
+  c.stroke();
+}
+function poly(c, pts) {
+  c.beginPath();
+  c.moveTo(pts[0], pts[1]);
+  for (let i = 2; i < pts.length; i += 2) c.lineTo(pts[i], pts[i + 1]);
+  c.closePath();
+  c.fill();
+}
+
+// A two-part leg hanging from a joint. swing turns the whole leg, fold bends it at the knee.
+function leg(c, x, y, len, swing, fold, front, w) {
+  const a1 = swing, l1 = len * .52, l2 = len * .5;
+  const kx = x + Math.sin(a1) * l1, ky = y + Math.cos(a1) * l1;
+  const a2 = front ? a1 - fold : a1 + fold * .9;
+  line(c, [x, y, kx, ky, kx + Math.sin(a2) * l2, ky + Math.cos(a2) * l2], w);
+}
+
+// Leg swing and fold for each foot. Feet on the ground sweep back; lifted feet fold and swing forward.
+function gait(ph, off, run, amp) {
+  const a = TAU * (ph + off);
+  return { swing: Math.sin(a) * amp * run, fold: Math.max(0, Math.cos(a)) * 1.1 * run };
+}
+
+/* ---------- rabbit ---------- */
+
+function rabbit(c, P) {
+  const fur = '#f2ede3', shade = '#d8cfc0', inner = '#e9bcb6', eye = '#2a211d';
+  const s = Math.sin(TAU * P.ph);
+  const air = Math.max(0, s) * P.run;       // stretched out mid-hop
+  const tuck = Math.max(0, -s) * P.run;     // bunched up on landing
+  const sit = P.alert * (1 - P.run);        // sits up tall to look
+  const low = P.crouch * (1 - P.run) * (1 - sit);
+  const lift = air * 30;
+  const bx = 116, cy = GROUND - 30 - lift + low * 5 - sit * 12;
+  const st = 1 + air * .38 - tuck * .14;
+
+  c.strokeStyle = shade;
+  // Far legs, behind the body.
+  line(c, [bx - 18, cy + 8, bx - 30 - 34 * air + 10 * tuck, GROUND - 3 - lift * .3], 10);
+  line(c, [bx + 30, cy + 10, bx + 40 + 30 * air - 12 * tuck, GROUND - 2 - lift * .7], 7);
+  c.fillStyle = fur;
+  c.strokeStyle = fur;
+  // Near hind foot: a long flat foot when bunched, kicked back in the air.
+  line(c, [bx - 16, cy + 12, bx - 22 - 40 * air + 14 * tuck, GROUND - 2 - lift * .25], 12);
+  // Near front leg.
+  line(c, [bx + 26, cy + 12, bx + 34 + 34 * air - 10 * tuck, GROUND - 1 - lift * .6], 8);
+  // Body and haunch.
+  ell(c, bx, cy, 44 * st, 29 / Math.sqrt(st) + sit * 5, -.12 - sit * .55 + air * .12);
+  ell(c, bx - 22 * st, cy + 6 - sit * 4, 26, 24);
+  // Tail.
+  c.fillStyle = '#fbf8f2';
+  ell(c, bx - 47 * st, cy - 6 - sit * 8, 9, 8);
+  // Head.
+  c.fillStyle = fur;
+  const hx = bx + 40 * st - sit * 14, hy = cy - 20 - sit * 30 + tuck * 6 + low * 4;
+  ell(c, hx, hy, 20, 17, .25);
+  // Ears: up when alert, laid back when running or hiding, with a small twitch at rest.
+  const twitch = Math.sin(P.t * 1.3) > .96 ? .25 : 0;
+  let ea = lerp(-1.85, -1.62, sit);
+  ea = lerp(ea, -2.75, Math.max(P.run, low * .8));
+  for (const [dx, k] of [[-6, 0], [2, 1]]) {
+    const a = ea + k * .16 + (k ? twitch : 0);
+    const ex = hx - 4 + dx + Math.cos(a) * 23, ey = hy - 9 + Math.sin(a) * 23;
+    c.fillStyle = k ? fur : shade;
+    ell(c, ex, ey, 24, 7.5, a);
+    if (k) { c.fillStyle = inner; ell(c, ex + Math.cos(a) * 2, ey + Math.sin(a) * 2, 15, 3.2, a); }
+  }
+  c.fillStyle = eye;
+  ell(c, hx + 8, hy - 3, 3.1, 3.6);
+  c.fillStyle = inner;
+  ell(c, hx + 19, hy + 3, 2.4, 2);
+}
+
+/* ---------- four-legged animals: cat, dog, sheep ---------- */
+
+const KINDS = {
+  cat: {
+    body: '#18181b', far: '#2c2c31', legLen: 52, legW: 10, bodyW: 34, span: 62,
+    gaitOff: [0, .1, .5, .6], amp: .85, bob: 7,
+  },
+  dog: {
+    body: '#ecdfc6', far: '#d3c3a6', legLen: 46, legW: 12, bodyW: 40, span: 60,
+    gaitOff: [0, .12, .52, .62], amp: .75, bob: 6,
+  },
+  sheep: {
+    body: '#2e2925', far: '#211d1a', legLen: 36, legW: 7, bodyW: 0, span: 58,
+    gaitOff: [0, .5, .5, 0], amp: .5, bob: 4,
+  },
+};
+
+function quadruped(c, kind, P) {
+  const K = KINDS[kind];
+  const low = P.crouch * (1 - P.run);
+  const flex = Math.sin(TAU * P.ph) * 9 * P.run * (kind === 'sheep' ? .2 : 1);
+  const bob = Math.sin(TAU * (P.ph * (kind === 'sheep' ? 2 : 1) + .25)) * K.bob * P.run;
+  const breathe = Math.sin(P.t * 2.2) * 1.2 * (1 - P.run);
+  const legLen = K.legLen * (1 - .5 * low);
+  const sy = GROUND - legLen - 2 + bob, hy = sy + 2;
+  const sx = 128 + K.span / 2 + flex / 2, hx = 128 - K.span / 2 - flex / 2;
+
+  // Far legs, then near legs, so the body covers the joints.
+  const legs = [
+    [hx + 6, hy, false, K.gaitOff[2], true], [sx - 4, sy, true, K.gaitOff[0], true],
+    [hx, hy, false, K.gaitOff[3], false], [sx, sy, true, K.gaitOff[1], false],
+  ];
+  for (const [x, y, front, off, far] of legs) {
+    const g = gait(P.ph, off, P.run, K.amp);
+    const fold = g.fold + low * (front ? .9 : 1.3);
+    c.strokeStyle = far ? K.far : K.body;
+    leg(c, x, y, K.legLen, g.swing + (front ? 0 : -.05), fold, front, K.legW);
+  }
+
+  if (kind === 'sheep') sheepBody(c, P, sx, sy, hx, hy, breathe);
+  else catDogBody(c, kind, K, P, sx, sy, hx, hy, breathe);
+}
+
+function catDogBody(c, kind, K, P, sx, sy, hx, hy, breathe) {
+  const cat = kind === 'cat';
+  c.strokeStyle = K.body;
+  c.fillStyle = K.body;
+  // Tail first, behind the body.
+  const sway = Math.sin(P.t * (cat ? 1.4 : 7)) * (cat ? 8 : 6);
+  if (cat) {
+    const up = 1 - P.run;
+    c.lineWidth = 8;
+    c.lineCap = 'round';
+    c.beginPath();
+    c.moveTo(hx - 10, hy - 6);
+    c.bezierCurveTo(hx - 40, hy - 4 + 20 * up, hx - 62, hy - 30 * up, lerp(hx - 78, hx - 50 + sway, up), lerp(hy - 18, hy - 70, up));
+    c.stroke();
+  } else {
+    c.strokeStyle = '#7a4b2c';
+    line(c, [hx - 12, hy - 8, hx - 26, hy - 26 + sway * .3, hx - 30 + sway, hy - 40], 9);
+    c.strokeStyle = K.body;
+  }
+  // Torso: a thick rounded stroke, with chest and haunch.
+  line(c, [hx, hy - 8 + breathe * .3, sx, sy - 10], K.bodyW);
+  ell(c, sx + 2, sy - 8, K.bodyW * .62, K.bodyW * .6 + breathe * .4);
+  ell(c, hx - 2, hy - 8, K.bodyW * .6, K.bodyW * .58);
+  if (!cat) { c.fillStyle = '#7a4b2c'; ell(c, hx + 22, hy - 22, 20, 10, -.1); c.fillStyle = K.body; }
+
+  // Head: in profile while moving, turned toward you when alert.
+  const look = P.alert > .5;
+  const lift = (1 - P.crouch * (1 - P.run)) * 6;
+  const head = cat ? 19 : 22;
+  const nx = sx + (look ? 12 : 26), ny = sy - 30 - lift + (P.run * 8);
+  if (look) faceFront(c, kind, nx, ny, head, P);
+  else faceSide(c, kind, nx, ny, head, P);
+}
+
+function faceSide(c, kind, x, y, r, P) {
+  if (kind === 'cat') {
+    c.fillStyle = '#18181b';
+    poly(c, [x - 12, y - 10, x - 6, y - 32, x + 4, y - 14]);
+    poly(c, [x - 2, y - 14, x + 8, y - 31, x + 13, y - 9]);
+    ell(c, x, y, r, r * .9);
+    ell(c, x + 14, y + 6, 9, 7);
+    c.fillStyle = '#d6e16a';
+    ell(c, x + 9, y - 2, 4.2, 3.6);
+    c.fillStyle = '#18181b';
+    ell(c, x + 10, y - 2, 1.4, 3.2);
+  } else {
+    c.fillStyle = '#ecdfc6';
+    ell(c, x, y, r, r * .92);
+    ell(c, x + 18, y + 6, 13, 10, .1);
+    c.fillStyle = '#7a4b2c';
+    ell(c, x - 8, y + 4 + Math.sin(TAU * P.ph) * 3 * P.run, 9, 17, .35 + P.run * .5);
+    c.fillStyle = '#221a16';
+    ell(c, x + 30, y + 3, 4.5, 4);
+    ell(c, x + 7, y - 5, 3, 3.2);
+  }
+}
+
+function faceFront(c, kind, x, y, r, P) {
+  const blink = (P.t % 3.7) < .12;
+  if (kind === 'cat') {
+    c.fillStyle = '#18181b';
+    poly(c, [x - 18, y - 8, x - 16, y - 34, x - 3, y - 17]);
+    poly(c, [x + 18, y - 8, x + 16, y - 34, x + 3, y - 17]);
+    ell(c, x, y, r + 2, r * .92);
+    c.fillStyle = '#d6e16a';
+    ell(c, x - 8, y - 1, 5.5, blink ? .8 : 5);
+    ell(c, x + 8, y - 1, 5.5, blink ? .8 : 5);
+    c.fillStyle = '#18181b';
+    if (!blink) { ell(c, x - 8, y - 1, 1.5, 4.2); ell(c, x + 8, y - 1, 1.5, 4.2); }
+  } else {
+    c.fillStyle = '#ecdfc6';
+    ell(c, x, y, r, r * .95);
+    c.fillStyle = '#7a4b2c';
+    ell(c, x - r + 1, y + 3, 8, 16, .28);
+    ell(c, x + r - 1, y + 3, 8, 16, -.28);
+    ell(c, x + 8, y - 6, 9, 8);
+    c.fillStyle = '#221a16';
+    ell(c, x - 8, y - 3, 3, blink ? .6 : 3.2);
+    ell(c, x + 8, y - 4, 3, blink ? .6 : 3.2);
+    ell(c, x, y + 8, 5, 3.6);
+  }
+}
+
+function sheepBody(c, P, sx, sy, hx, hy, breathe) {
+  const wool = '#f1ece0', woolShade = '#dcd5c5', face = '#2e2925';
+  const cx = (sx + hx) / 2, cy = sy - 22 + breathe * .4;
+  c.fillStyle = woolShade;
+  for (const [dx, dy, r] of [[-30, 6, 19], [-8, 10, 20], [16, 9, 19], [34, 4, 16]]) ell(c, cx + dx, cy + dy, r, r);
+  c.fillStyle = wool;
+  for (const [dx, dy, r] of [[-38, -4, 18], [-18, -14, 21], [4, -16, 22], [26, -10, 20], [40, 0, 16], [-26, 6, 18], [-2, 4, 22], [22, 4, 20]]) {
+    ell(c, cx + dx, cy + dy, r, r);
+  }
+  const look = P.alert > .5;
+  const x = sx + (look ? 16 : 30), y = sy - 32 + P.run * 6 + (1 - P.run) * P.crouch * 6;
+  c.fillStyle = face;
+  if (look) {
+    ell(c, x - 15, y - 6, 9, 4, .3);
+    ell(c, x + 15, y - 6, 9, 4, -.3);
+    ell(c, x, y, 11, 15);
+    c.fillStyle = wool;
+    ell(c, x, y - 15, 11, 7);
+    c.fillStyle = '#efe6cf';
+    ell(c, x - 5, y - 2, 2.2, 2.4);
+    ell(c, x + 5, y - 2, 2.2, 2.4);
+  } else {
+    ell(c, x - 2, y - 8, 9, 4, -.5);
+    ell(c, x + 6, y + 2, 10, 14, -.7);
+    c.fillStyle = wool;
+    ell(c, x - 2, y - 10, 10, 7);
+    c.fillStyle = '#efe6cf';
+    ell(c, x + 8, y - 2, 2.2, 2.4);
+  }
+}
+
+/* ---------- bird ---------- */
+
+function bird(c, P) {
+  const body = '#4b3b2c', wing = '#36291e', belly = '#9a7e5d', beak = '#c99a3a';
+  if (P.fly < .5) {
+    // On the ground: pecking, then head up and tail flicking when it sees you.
+    const peck = (1 - P.alert) * Math.max(0, Math.sin(P.t * 3.1)) ** 6;
+    const y = GROUND - 15;
+    c.strokeStyle = beak;
+    line(c, [124, y + 8, 122, GROUND - 2], 2.4);
+    line(c, [130, y + 8, 132, GROUND - 2], 2.4);
+    c.fillStyle = body;
+    poly(c, [108, y - 2, 82, y - 12 - P.alert * 6, 86, y + 2]);
+    ell(c, 122, y, 18, 12, -.15);
+    c.fillStyle = belly;
+    ell(c, 128, y + 4, 11, 7, -.15);
+    c.fillStyle = wing;
+    ell(c, 116, y - 2, 13, 8, -.25);
+    c.fillStyle = body;
+    const hx = 140 + peck * 6, hy = y - 12 + peck * 16 - P.alert * 4;
+    ell(c, hx, hy, 9, 8.5);
+    c.fillStyle = beak;
+    poly(c, [hx + 7, hy - 2, hx + 16, hy + 1, hx + 7, hy + 3]);
+    c.fillStyle = '#120d0a';
+    ell(c, hx + 3, hy - 2, 1.8, 1.8);
+  } else {
+    // In the air: wings beat around the shoulder.
+    const x = 128, y = 128;
+    const w = Math.sin(TAU * P.flap);
+    c.fillStyle = body;
+    poly(c, [x - 16, y, x - 38, y - 6, x - 36, y + 7]);
+    c.fillStyle = wing;
+    ell(c, x - 4, y - 4 - w * 14, 22, 6.5, -.25 - w * .9);
+    c.fillStyle = body;
+    ell(c, x, y, 18, 9);
+    ell(c, x + 17, y - 4, 8, 7.5);
+    c.fillStyle = beak;
+    poly(c, [x + 23, y - 6, x + 31, y - 3, x + 23, y - 1]);
+    c.fillStyle = wing;
+    ell(c, x - 2, y - 2 + w * 12, 20, 6, .2 + w * .8);
+  }
+}
+
+function drawAnimal(c, kind, P) {
+  c.clearRect(0, 0, 256, 256);
+  if (kind === 'rabbit') rabbit(c, P);
+  else if (kind === 'bird') bird(c, P);
+  else quadruped(c, kind, P);
+}
+
+(() => {
+  const canvas = document.getElementById('field');
+  const msg = document.getElementById('msg');
+  const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, depth: true, powerPreference: 'high-performance' });
+  if (!gl) {
+    msg.textContent = 'This field needs WebGL 2. Turn on hardware acceleration in your browser to see it.';
+    return;
+  }
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---------- the land ---------- */
+
+  // Soft rolling mounds. The shaders use the same formula.
+  const groundAt = (x, z) =>
+    .16 * Math.sin(.9 * x + .4 * z) * Math.cos(.7 * z - .2 * x) +
+    .07 * Math.sin(1.7 * x - 1.3 * z + 1.0) +
+    .04 * Math.sin(2.9 * x + 2.1 * z + 2.0);
+
+  const WIND = [Math.cos(.5), Math.sin(.5)];   // the breeze blows this way across the ground
+  const SUN = (() => { const v = [-.45, .55, .9], l = Math.hypot(...v); return v.map(x => x / l); })();
+
+  /* ---------- camera: looking down across the field ---------- */
+
+  const PITCH = 50 * Math.PI / 180, DIST = 4.2, FOVY = 42 * Math.PI / 180;
+  const FWD = [0, -Math.sin(PITCH), Math.cos(PITCH)];
+  const UP = [0, Math.cos(PITCH), Math.sin(PITCH)];
+  const RIGHT = [1, 0, 0];
+  const CAM = [-FWD[0] * DIST, -FWD[1] * DIST, -FWD[2] * DIST];
+  let focalX = 1, focalY = 1;
+
+  // What part of the ground the window shows, with room for blades that lean in from outside it.
+  const field = { zNear: 0, zFar: 0, halfNear: 0, halfFar: 0 };
+  function fitView() {
+    const aspect = Math.max(1, innerWidth) / Math.max(1, innerHeight);
+    focalY = 1 / Math.tan(FOVY / 2);
+    focalX = focalY / aspect;
+    const hit = (nx, ny) => {
+      const d = [FWD[0] + RIGHT[0] * nx / focalX + UP[0] * ny / focalY, FWD[1] + RIGHT[1] * nx / focalX + UP[1] * ny / focalY, FWD[2] + RIGHT[2] * nx / focalX + UP[2] * ny / focalY];
+      const t = -CAM[1] / Math.min(d[1], -.05);
+      return [CAM[0] + d[0] * t, CAM[2] + d[2] * t];
+    };
+    const bl = hit(-1, -1), tl = hit(-1, 1);
+    field.zNear = bl[1] - .9;
+    field.zFar = tl[1] + .5;
+    field.halfNear = Math.abs(bl[0]) + .7;
+    field.halfFar = Math.abs(tl[0]) + .7;
+  }
+
+  function rayFromScreen(nx, ny) {
+    const d = [FWD[0] + RIGHT[0] * nx / focalX + UP[0] * ny / focalY, FWD[1] + RIGHT[1] * nx / focalX + UP[1] * ny / focalY, FWD[2] + RIGHT[2] * nx / focalX + UP[2] * ny / focalY];
+    const l = Math.hypot(...d);
+    return d.map(v => v / l);
+  }
+
+  // Where a screen point meets the ground: march along the ray, then refine.
+  function groundHit(nx, ny) {
+    const d = rayFromScreen(nx, ny);
+    let t0 = 0, t = 0;
+    for (; t < 30; t += .05) {
+      const y = CAM[1] + d[1] * t;
+      if (y < groundAt(CAM[0] + d[0] * t, CAM[2] + d[2] * t)) break;
+      t0 = t;
+    }
+    for (let i = 0; i < 12; i++) {
+      const m = (t0 + t) / 2;
+      if (CAM[1] + d[1] * m < groundAt(CAM[0] + d[0] * m, CAM[2] + d[2] * m)) t = m; else t0 = m;
+    }
+    return [CAM[0] + d[0] * t, CAM[2] + d[2] * t];
+  }
+
+  /* ---------- the wind the cursor makes: a soft spring field of bent grass ---------- */
+
+  const CELL = .05;
+  const grid = { x0: 0, z0: 0, nx: 1, nz: 1, bx: null, bz: null, vx: null, vz: null, packed: null };
+  function makeGrid() {
+    const half = Math.max(field.halfNear, field.halfFar);
+    grid.x0 = -half; grid.z0 = field.zNear;
+    grid.nx = Math.ceil(2 * half / CELL) + 1;
+    grid.nz = Math.ceil((field.zFar - field.zNear) / CELL) + 1;
+    const n = grid.nx * grid.nz;
+    grid.bx = new Float32Array(n); grid.bz = new Float32Array(n);
+    grid.vx = new Float32Array(n); grid.vz = new Float32Array(n);
+    grid.packed = new Float32Array(n * 4);
+    grid.mag = new Float32Array(n); grid.tmp = new Float32Array(n);
+  }
+
+  // Push grass within a radius toward a bend, by a rate. Bends are in radians of lean, as a vector on the ground.
+  function push(cx, cz, radius, fn) {
+    const i0 = Math.max(0, Math.floor((cx - radius - grid.x0) / CELL)), i1 = Math.min(grid.nx - 1, Math.ceil((cx + radius - grid.x0) / CELL));
+    const j0 = Math.max(0, Math.floor((cz - radius - grid.z0) / CELL)), j1 = Math.min(grid.nz - 1, Math.ceil((cz + radius - grid.z0) / CELL));
+    for (let j = j0; j <= j1; j++) {
+      const z = grid.z0 + j * CELL, dz = z - cz;
+      for (let i = i0; i <= i1; i++) {
+        const dx = grid.x0 + i * CELL - cx;
+        const d2 = (dx * dx + dz * dz) / (radius * radius);
+        if (d2 >= 1) continue;
+        const f = (1 - d2) * (1 - d2);
+        const d = Math.sqrt(dx * dx + dz * dz) || 1e-4;
+        fn(i + j * grid.nx, f, dx / d, dz / d);
+      }
+    }
+  }
+
+  function bendToward(k, tx, tz, rate) {
+    grid.bx[k] += (tx - grid.bx[k]) * rate;
+    grid.bz[k] += (tz - grid.bz[k]) * rate;
+    grid.vx[k] *= 1 - rate; grid.vz[k] *= 1 - rate;
+  }
+
+  // Soft grass rises back slowly, without springing past upright.
+  function relaxGrid(dt) {
+    const K = 3.2, C = 3.4, n = grid.bx.length;
+    for (let k = 0; k < n; k++) {
+      let vx = grid.vx[k], vz = grid.vz[k];
+      vx += (-K * grid.bx[k] - C * vx) * dt;
+      vz += (-K * grid.bz[k] - C * vz) * dt;
+      grid.vx[k] = vx; grid.vz[k] = vz;
+      grid.bx[k] += vx * dt; grid.bz[k] += vz * dt;
+    }
+  }
+
+  // How open the grass is around each spot: the most bent grass within about a third of a unit.
+  function packGrid() {
+    const { nx, nz, bx, bz, mag, tmp, packed } = grid, R = 6;
+    for (let k = 0; k < nx * nz; k++) mag[k] = Math.hypot(bx[k], bz[k]);
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+      let m = 0;
+      for (let d = Math.max(0, i - R); d <= Math.min(nx - 1, i + R); d++) m = Math.max(m, mag[d + j * nx]);
+      tmp[i + j * nx] = m;
+    }
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+      let m = 0;
+      for (let d = Math.max(0, j - R); d <= Math.min(nz - 1, j + R); d++) m = Math.max(m, tmp[i + d * nx]);
+      const k = i + j * nx;
+      packed[4 * k] = bx[k]; packed[4 * k + 1] = bz[k]; packed[4 * k + 2] = m; packed[4 * k + 3] = 0;
+    }
+  }
+
+  function bendAt(x, z) {
+    const fx = Math.min(Math.max((x - grid.x0) / CELL, 0), grid.nx - 1.001);
+    const fz = Math.min(Math.max((z - grid.z0) / CELL, 0), grid.nz - 1.001);
+    const i = fx | 0, j = fz | 0, u = fx - i, w = fz - j, k = i + j * grid.nx;
+    const m = q => Math.hypot(grid.bx[q], grid.bz[q]);
+    return (m(k) * (1 - u) + m(k + 1) * u) * (1 - w) + (m(k + grid.nx) * (1 - u) + m(k + grid.nx + 1) * u) * w;
+  }
+
+  /* ---------- the cursor ---------- */
+
+  let pointer = null, lastPointer = null, down = false;
+  let velX = 0, velZ = 0;
+  function moveTo(cx, cy) {
+    const b = canvas.getBoundingClientRect();
+    pointer = groundHit((cx - b.left) / b.width * 2 - 1, 1 - (cy - b.top) / b.height * 2);
+  }
+  canvas.addEventListener('pointermove', e => moveTo(e.clientX, e.clientY), { passive: true });
+  canvas.addEventListener('pointerdown', e => { down = true; moveTo(e.clientX, e.clientY); canvas.setPointerCapture?.(e.pointerId); }, { passive: true });
+  addEventListener('pointerup', () => { down = false; }, { passive: true });
+  canvas.addEventListener('pointerleave', () => { pointer = lastPointer = null; velX = velZ = 0; });
+
+  function blow(dt) {
+    if (!pointer) return;
+    const last = lastPointer || pointer;
+    const k = Math.min(1, dt / .07);
+    velX += ((pointer[0] - last[0]) / dt - velX) * k;
+    velZ += ((pointer[1] - last[1]) / dt - velZ) * k;
+    lastPointer = pointer;
+    const speed = Math.hypot(velX, velZ);
+    // Holding the button is a stronger, wider gust.
+    const gust = Math.min(speed / 2.2 + (down ? .45 : 0), 1);
+    const ux = speed > 1e-4 ? velX / speed : 0, uz = speed > 1e-4 ? velZ / speed : 0;
+    // A moving cursor is a gust that lays grass down along its path and a little outward.
+    // A resting cursor only stirs the grass around it.
+    const radius = (down ? .82 : .6) + .18 * gust;
+    push(pointer[0], pointer[1], radius, (q, f, rx, rz) => {
+      const out = .22 + .45 * gust;
+      const tx = ux * 1.55 * gust + rx * out, tz = uz * 1.55 * gust + rz * out;
+      // Only ever push harder than what's there, so a passing gust doesn't lift grass already down.
+      const want = Math.hypot(tx, tz), have = Math.hypot(grid.bx[q], grid.bz[q]);
+      if (want * f < have * .8) return;
+      bendToward(q, tx, tz, Math.min(1, f * (4 + 10 * gust) * dt));
+    });
+  }
+
+  /* ---------- the animals ---------- */
+
+  const KINDS = {
+    rabbit: { size: .95, speed: 2.7, stride: .62, flee: [1.9, 2.6] },
+    cat: { size: 1.0, speed: 2.5, stride: .7, flee: [1.8, 2.5] },
+    dog: { size: 1.05, speed: 2.3, stride: .66, flee: [1.8, 2.4] },
+    sheep: { size: 1.15, speed: 1.45, stride: .32, flee: [1.3, 1.8] },
+    bird: { size: .62, speed: 2.4, stride: 1, flee: [0, 0] },
+  };
+  const animals = [];
+
+  function freeSpot(avoid) {
+    const inset = .75;
+    for (let tries = 0; tries < 60; tries++) {
+      const tz = Math.random();
+      const z = field.zNear + 1.1 + (field.zFar - field.zNear - 1.6) * tz;
+      const half = field.halfNear + (field.halfFar - field.halfNear) * ((z - field.zNear) / (field.zFar - field.zNear)) - inset - .7;
+      const x = (Math.random() * 2 - 1) * Math.max(half, .5);
+      if (avoid && Math.hypot(x - avoid[0], z - avoid[1]) < 2.2) continue;
+      if (animals.some(a => a.state !== 'gone' && Math.hypot(a.x - x, a.z - z) < 1.3)) continue;
+      return [x, z];
+    }
+    return [0, field.zNear + 2];
+  }
+
+  // Keep a point inside the visible field.
+  function inField(x, z, margin) {
+    const zc = Math.min(Math.max(z, field.zNear + .9 + margin), field.zFar - .5 - margin);
+    const half = field.halfNear + (field.halfFar - field.halfNear) * ((zc - field.zNear) / (field.zFar - field.zNear)) - .7 - margin;
+    return [Math.min(Math.max(x, -half), half), zc];
+  }
+
+  function makeAnimal(kind) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 256;
+    const a = {
+      kind, ...KINDS[kind], x: 0, z: 0, y: 0, state: 'hidden', timer: 0, cool: 1.5,
+      dirX: 1, dirZ: 0, v: 0, dest: null, ph: Math.random(), run: 0, alert: 0, crouch: 1, t: Math.random() * 10,
+      face: Math.random() < .5 ? 1 : -1, fly: 0, flap: 0, canvas: c, ctx: c.getContext('2d'), tex: null,
+    };
+    [a.x, a.z] = freeSpot(null);
+    animals.push(a);
+    return a;
+  }
+
+  function startFlee(a) {
+    if (a.kind === 'bird') {
+      a.state = 'fly';
+      const away = pointer ? Math.atan2(a.z - pointer[1], a.x - pointer[0]) : Math.random() * 6.28;
+      const ang = away + (Math.random() - .5) * 1.2;
+      a.dirX = Math.cos(ang); a.dirZ = Math.sin(ang);
+      a.face = a.dirX >= 0 ? 1 : -1;
+      return;
+    }
+    // Run away from the cursor, a little to either side, toward grass still standing.
+    let best = null, bestScore = -1e9;
+    const away = pointer ? Math.atan2(a.z - pointer[1], a.x - pointer[0]) : Math.random() * 6.28;
+    for (let i = 0; i < 9; i++) {
+      const ang = away + (Math.random() - .5) * 1.7;
+      const dist = a.flee[0] + Math.random() * (a.flee[1] - a.flee[0]);
+      const [x, z] = inField(a.x + Math.cos(ang) * dist, a.z + Math.sin(ang) * dist, 0);
+      const real = Math.hypot(x - a.x, z - a.z);
+      const fromCursor = pointer ? Math.hypot(x - pointer[0], z - pointer[1]) : 3;
+      const score = real * .6 + fromCursor - bendAt(x, z) * 3 - (real < 1 ? 3 : 0);
+      if (score > bestScore) { bestScore = score; best = [x, z]; }
+    }
+    a.dest = best;
+    const d = Math.hypot(best[0] - a.x, best[1] - a.z) || 1;
+    a.dirX = (best[0] - a.x) / d; a.dirZ = (best[1] - a.z) / d;
+    if (Math.abs(a.dirX) > .15) a.face = a.dirX > 0 ? 1 : -1;
+    a.state = 'flee';
+    a.timer = 4;
+  }
+
+  function updateAnimal(a, dt) {
+    a.t += dt;
+    const ease = (cur, to, rate) => cur + (to - cur) * Math.min(1, dt * rate);
+    switch (a.state) {
+      case 'hidden': {
+        a.crouch = ease(a.crouch, 1, 3);
+        a.alert = ease(a.alert, 0, 4);
+        a.run = ease(a.run, 0, 6);
+        a.cool -= dt;
+        // Found: the grass over it is blown flat while the cursor is close.
+        if (a.cool <= 0 && pointer && Math.hypot(pointer[0] - a.x, pointer[1] - a.z) < 1.2 && bendAt(a.x, a.z) > .8) {
+          a.state = 'alert';
+          a.timer = .45 + Math.random() * .3;
+        }
+        break;
+      }
+      case 'alert':
+        // It sees you: freezes, rises, and looks.
+        a.alert = ease(a.alert, 1, 14);
+        a.crouch = ease(a.crouch, .2, 8);
+        a.timer -= dt;
+        if (a.timer <= 0) startFlee(a);
+        break;
+      case 'flee': {
+        const left = Math.hypot(a.dest[0] - a.x, a.dest[1] - a.z);
+        const target = left < .55 ? a.speed * Math.max(left / .55, .2) : a.speed;
+        a.v = ease(a.v, target, a.v < target ? 5 : 8);
+        // Bolts away: the look gives way fast, the body leans into the run.
+        a.alert = ease(a.alert, 0, 10);
+        a.crouch = ease(a.crouch, 0, 8);
+        a.run = Math.min(1, a.v / (a.speed * .6));
+        // Head for the hiding place; a rabbit jinks from side to side on the way.
+        if (left > .05) { a.dirX = (a.dest[0] - a.x) / left; a.dirZ = (a.dest[1] - a.z) / left; }
+        let dx = a.dirX, dz = a.dirZ;
+        if (a.kind === 'rabbit') {
+          const wob = Math.sin(a.t * 5.5) * .35 * Math.min(1, left / .6);
+          dx = a.dirX * Math.cos(wob) - a.dirZ * Math.sin(wob);
+          dz = a.dirX * Math.sin(wob) + a.dirZ * Math.cos(wob);
+        }
+        a.x += dx * a.v * dt; a.z += dz * a.v * dt;
+        a.ph = (a.ph + a.v / a.stride * dt) % 1;
+        // It parts the grass as it runs through.
+        push(a.x, a.z, .3, (q, f, rx, rz) => bendToward(q, dx * .9 + rx * .6, dz * .9 + rz * .6, Math.min(1, f * 9 * dt)));
+        a.timer -= dt;
+        if (left < .08 || (left < .3 && a.v < .3) || a.timer <= 0) { a.state = 'settle'; a.timer = .5; }
+        break;
+      }
+      case 'settle':
+        // Into the tall grass: slows, sinks low, and is hidden again.
+        a.v = ease(a.v, 0, 8);
+        a.run = ease(a.run, 0, 6);
+        a.crouch = ease(a.crouch, 1, 5);
+        a.ph = (a.ph + a.v / a.stride * dt) % 1;
+        a.timer -= dt;
+        if (a.timer <= 0) { a.state = 'hidden'; a.cool = 2.5; }
+        break;
+      case 'fly': {
+        // A bird bursts up and away out of sight, then comes down somewhere else later.
+        a.fly = 1;
+        a.alert = 0;
+        a.v = ease(a.v, a.speed, 3);
+        a.x += a.dirX * a.v * dt; a.z += a.dirZ * a.v * dt;
+        a.y += (1.6 - a.y * .15) * dt;
+        a.flap = (a.flap + dt * 7.5) % 1;
+        if (a.y < .5) push(a.x, a.z, .35, (q, f, rx, rz) => bendToward(q, rx * .8, rz * .8, Math.min(1, f * 6 * dt)));
+        if (a.y > 3.2) { a.state = 'gone'; a.timer = 6 + Math.random() * 4; }
+        break;
+      }
+      case 'gone':
+        a.timer -= dt;
+        if (a.timer <= 0) {
+          [a.x, a.z] = freeSpot(pointer);
+          a.y = 0; a.fly = 0; a.v = 0; a.state = 'hidden'; a.cool = 2; a.crouch = 1;
+        }
+        break;
+    }
+  }
+
+  /* ---------- shaders ---------- */
+
+  const COMMON = `
+  uniform vec3 uCam, uR, uU, uF;
+  uniform vec2 uFocal;
+  vec4 project(vec3 p){
+    vec3 q = p - uCam;
+    float x = dot(q, uR), y = dot(q, uU), z = dot(q, uF);
+    const float n = .1, f = 40.;
+    return vec4(x * uFocal.x, y * uFocal.y, z * (f + n) / (f - n) - 2. * f * n / (f - n), z);
+  }
+  float terrain(vec2 p){
+    return .16 * sin(.9 * p.x + .4 * p.y) * cos(.7 * p.y - .2 * p.x)
+         + .07 * sin(1.7 * p.x - 1.3 * p.y + 1.0)
+         + .04 * sin(2.9 * p.x + 2.1 * p.y + 2.0);
+  }
+  vec3 terrainNormal(vec2 p){
+    const float e = .04;
+    float h = terrain(p);
+    return normalize(vec3(-(terrain(p + vec2(e, 0)) - h) / e, 1., -(terrain(p + vec2(0, e)) - h) / e));
+  }
+  float h21(vec2 p){ vec3 q = fract(p.xyx * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+  float vn(vec2 p){
+    vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+    return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y);
+  }`;
+
+  const FINISH = `
+  uniform vec2 uRes;
+  vec3 finish(vec3 c, float dist){
+    // Warm haze toward the far side, a soft vignette, and dither against banding.
+    c = mix(c, vec3(.62, .70, .40), smoothstep(5., 10., dist) * .2);
+    vec2 q = gl_FragCoord.xy / uRes - .5;
+    c *= 1. - .55 * dot(q, q);
+    c += (fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(.06711056, .00583715)))) - .5) / 255.;
+    return c;
+  }`;
+
+  const GRASS_VERT = `#version 300 es
+  precision highp float;
+  layout(location=0) in vec4 aRoot;    // x, z, ground height, blade height
+  layout(location=1) in vec4 aShape;   // width, twist, lean x, lean z
+  layout(location=2) in vec4 aLook;    // seed head, gold, sway phase, sunlit slope
+  uniform float uT, uWidth;
+  uniform vec4 uGrid;    // origin x, origin z, size x, size z
+  uniform sampler2D uBend;
+  uniform vec2 uWind;
+  uniform vec3 uSun;
+  ${COMMON}
+  out vec3 vCol;
+  out float vDist;
+  const float SEGS = 5.;
+  void main(){
+    float s = float(gl_VertexID >> 1) / SEGS;
+    float side = float(gl_VertexID & 1) * 2. - 1.;
+    vec2 p = aRoot.xy;
+    float gy = aRoot.z, H = aRoot.w, W = aShape.x * uWidth, tw = aShape.y;
+    float plume = aLook.x, gold = aLook.y, ph = aLook.z, slope = aLook.w;
+
+    // Breeze: broad slow swells rolling downwind, small and gentle.
+    float g1 = vn(p * .42 - uWind * uT * .42), g2 = vn(p * 1.15 - uWind * uT * .75 + 5.3);
+    vec2 breeze = uWind * (.04 + .17 * g1 + .06 * g2);
+    breeze += vec2(sin(uT * 1.5 + ph), cos(uT * 1.2 + ph * 1.7)) * .018;
+    // The wind from the cursor and the animals pushing through; b says how open the grass around is.
+    vec4 bt = texture(uBend, (p - uGrid.xy) / uGrid.zw);
+
+    vec2 all_ = aShape.zw + breeze + bt.xy;
+    float L = length(all_);
+    float T = min(L, 1.85);
+    vec2 dir = L > 1e-4 ? all_ / L : vec2(0, 1);
+
+    // A blade curves along an arc, so it keeps its length and gets lower as it bends.
+    // Pushed hard, it gives way at the base and lies along the ground instead of curling over.
+    float give = smoothstep(.5, 1.5, T);
+    float b0 = mix(.38, .78, give) * T, k = max(mix(.82, .32, give) * T, 1e-3);
+    // Never past lying flat, so tips don't sink into the ground.
+    float over = max(b0 + k - 1.62, 0.);
+    b0 = min(b0, 1.45); k = max(k - over, 1e-3);
+    float ang = b0 + k * s;
+    float horiz = H * (cos(b0) - cos(ang)) / k;
+    float vert = H * (sin(ang) - sin(b0)) / k;
+    vec3 pos = vec3(p.x + dir.x * horiz, gy + vert, p.y + dir.y * horiz);
+
+    // Blades bend across their flat side, with a little twist.
+    vec2 across = vec2(-dir.y, dir.x);
+    vec3 wdir = vec3(across.x * cos(tw) - across.y * sin(tw), 0., across.x * sin(tw) + across.y * cos(tw));
+    float w = W * pow(1. - s, .85);
+    w += plume * W * 1.1 * smoothstep(.66, .82, s) * (1. - smoothstep(.92, 1., s));
+    pos += wdir * w * side;
+
+    // Light.
+    vec3 tang = vec3(dir.x * sin(ang), cos(ang), dir.y * sin(ang));
+    vec3 n = normalize(cross(wdir, tang));
+    vec3 V = normalize(uCam - pos);
+    if (dot(n, V) < 0.) n = -n;
+    float diff = .5 + .5 * clamp(dot(n, uSun), 0., 1.);
+    float flat_ = smoothstep(.35, 1.3, T);
+    float ao = mix(.34, 1., pow(s, .7));
+    ao = mix(ao, 1., flat_ * .8);
+    // Standing grass at the edge of a clearing has its side opened to the sky.
+    ao = mix(ao, 1., smoothstep(.4, 1.2, bt.z) * .65);
+
+    vec3 dark = vec3(.06, .12, .025), mid = vec3(.17, .36, .05), lime = vec3(.46, .66, .14), straw = vec3(.80, .78, .36);
+    vec3 c = mix(dark, mid, smoothstep(0., .55, max(s, flat_ * .6)));
+    c = mix(c, mix(lime, straw, gold), smoothstep(.5, 1., s));
+    c = mix(c, vec3(.72, .74, .42), plume * smoothstep(.66, .82, s) * .7);
+    c *= ao * (diff * .7 + .4) * mix(.55, 1.15, slope);
+    // Grass laid down by wind shows its long sunlit side: the bright bands of a windy field.
+    float sheen = flat_ * (.55 + .45 * dot(dir, normalize(uSun.xz)));
+    c += vec3(.85, .86, .40) * sheen * .3 * s * s;
+    // Sun shining through the tips.
+    float back = pow(max(dot(-V, uSun), 0.), 3.);
+    c += vec3(.85, .75, .3) * back * s * s * .3;
+
+    vCol = c;
+    vDist = length(pos - uCam);
+    gl_Position = project(pos);
+  }`;
+
+  const GRASS_FRAG = `#version 300 es
+  precision highp float;
+  in vec3 vCol;
+  in float vDist;
+  out vec4 o;
+  ${FINISH}
+  void main(){ o = vec4(finish(vCol, vDist), 1.); }`;
+
+  const GROUND_VERT = `#version 300 es
+  precision highp float;
+  layout(location=0) in vec2 aUv;
+  uniform vec4 uRect;   // x0, z0, size x, size z
+  uniform vec3 uSun;
+  ${COMMON}
+  out vec3 vCol;
+  out float vDist;
+  void main(){
+    vec2 p = uRect.xy + aUv * uRect.zw;
+    vec3 pos = vec3(p.x, terrain(p), p.y);
+    float lit = clamp(dot(terrainNormal(p), uSun), 0., 1.);
+    // Deep in the grass the ground is dim, with old thatch.
+    vec3 c = mix(vec3(.14, .18, .06), vec3(.27, .28, .12), vn(p * 6.));
+    vCol = c * (.6 + .5 * lit);
+    vDist = length(pos - uCam);
+    gl_Position = project(pos);
+  }`;
+
+  const GROUND_FRAG = GRASS_FRAG;
+
+  const ANIMAL_VERT = `#version 300 es
+  precision highp float;
+  uniform vec3 uPos, uSide, uLift;
+  uniform float uSize, uFlip;
+  ${COMMON}
+  out vec2 vUv;
+  out float vDist;
+  void main(){
+    vec2 c = vec2(gl_VertexID & 1, gl_VertexID >> 1);
+    // The sprite's ground line sits on the ground.
+    vec3 pos = uPos + uSide * (c.x - .5) * uSize + uLift * (c.y - 20. / 256.) * uSize;
+    vUv = vec2(uFlip > 0. ? c.x : 1. - c.x, 1. - c.y);
+    vDist = length(pos - uCam);
+    gl_Position = project(pos);
+  }`;
+
+  const ANIMAL_FRAG = `#version 300 es
+  precision highp float;
+  in vec2 vUv;
+  in float vDist;
+  uniform sampler2D uTex;
+  out vec4 o;
+  ${FINISH}
+  void main(){
+    vec4 t = texture(uTex, vUv);
+    if (t.a < .03) discard;
+    // Warm light from the low sun, and a little shade down in the grass.
+    float shade = mix(.62, 1., smoothstep(.92, .6, vUv.y));
+    vec3 c = t.rgb / t.a * vec3(1.02, .97, .86) * shade;
+    o = vec4(finish(c, vDist) * t.a, t.a);
+  }`;
+
+  /* ---------- gl ---------- */
+
+  function program(vs, fs) {
+    const make = (type, src) => {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
+      return s;
+    };
+    const p = gl.createProgram();
+    gl.attachShader(p, make(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, make(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(p));
+    const u = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) { const name = gl.getActiveUniform(p, i).name; u[name] = gl.getUniformLocation(p, name); }
+    return { p, u };
+  }
+
+  let P = {}, grassVao, grassBuf, groundVao, groundCount, bendTex;
+
+  // Value noise matching the shader's, for the parts of each blade that never change.
+  const fract = x => x - Math.floor(x);
+  function h21(x, y) {
+    let a = fract(x * .1031), b = fract(y * .1031), c = fract(x * .1031);
+    const d = a * (b + 33.33) + b * (c + 33.33) + c * (a + 33.33);
+    a += d; b += d; c += d;
+    return fract((a + b) * c);
+  }
+  function vn(x, y) {
+    const i = Math.floor(x), j = Math.floor(y);
+    let f = x - i, g = y - j;
+    f = f * f * (3 - 2 * f); g = g * g * (3 - 2 * g);
+    const a = h21(i, j), b = h21(i + 1, j), c = h21(i, j + 1), d = h21(i + 1, j + 1);
+    return (a + (b - a) * f) + ((c + (d - c) * f) - (a + (b - a) * f)) * g;
+  }
+
+  function buildBlades(count) {
+    const data = new Float32Array(count * 12);
+    const a = field.halfNear, b = field.halfFar, total = a + (b - a) * .5;
+    const windAng = Math.atan2(WIND[1], WIND[0]);
+    for (let n = 0; n < count; n++) {
+      // Spread evenly over the visible ground, which widens with distance.
+      const v = Math.random();
+      const tz = Math.abs(b - a) < 1e-4 ? v : (-a + Math.sqrt(a * a + 2 * (b - a) * v * total)) / (b - a);
+      const x = (Math.random() * 2 - 1) * (a + (b - a) * tz), z = field.zNear + (field.zFar - field.zNear) * tz;
+      const gy = groundAt(x, z);
+      // Tall where the soil is good, shorter in places, with a few feathery seed heads.
+      const H = .34 + .36 * vn(x * .8 + 3.1, z * .8 + 3.1) + .08 * vn(x * 3.1, z * 3.1) + .06 * Math.random();
+      const W = .0085 + .0065 * Math.random();
+      // Big swathes lie in slightly different directions and amounts, like a field after a long wind.
+      const swath = vn(x * .55 + 7.7, z * .55 + 7.7), swath2 = vn(x * .9 - 2.3, z * .9 - 2.3);
+      const la = windAng + (swath - .5) * 1.5 + (Math.random() - .5) * 1.1;
+      const lean = .22 + .62 * swath2 * swath2 + .3 * Math.random();
+      const gold = Math.min(1, Math.max(0, (vn(x * .55 + 11, z * .55 + 11) - .5) / .45)) ** 2 * .5 + .15 * Math.random();
+      // Slopes facing the sun are brighter.
+      const e = .04, nx = -(groundAt(x + e, z) - gy) / e, nz = -(groundAt(x, z + e) - gy) / e, nl = Math.hypot(nx, 1, nz);
+      const slope = Math.min(1, Math.max(0, ((nx * SUN[0] + SUN[1] + nz * SUN[2]) / nl) * 1.5 - .15));
+      const o = n * 12;
+      data[o] = x; data[o + 1] = z; data[o + 2] = gy; data[o + 3] = H;
+      data[o + 4] = W; data[o + 5] = (Math.random() - .5) * 1.2; data[o + 6] = Math.cos(la) * lean; data[o + 7] = Math.sin(la) * lean;
+      data[o + 8] = Math.random() < .04 ? 1 : 0; data[o + 9] = gold; data[o + 10] = Math.random() * 6.2832; data[o + 11] = slope;
+    }
+    gl.bindVertexArray(grassVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, grassBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    for (let i = 0; i < 3; i++) {
+      gl.enableVertexAttribArray(i);
+      gl.vertexAttribPointer(i, 4, gl.FLOAT, false, 48, i * 16);
+      gl.vertexAttribDivisor(i, 1);
+    }
+    gl.bindVertexArray(null);
+  }
+  const GROUND_N = 160;
+
+  function build() {
+    P.grass = program(GRASS_VERT, GRASS_FRAG);
+    P.ground = program(GROUND_VERT, GROUND_FRAG);
+    P.animal = program(ANIMAL_VERT, ANIMAL_FRAG);
+    grassVao = gl.createVertexArray();
+    grassBuf = gl.createBuffer();
+    buildBlades(fullCount);
+
+    const v = new Float32Array((GROUND_N + 1) * (GROUND_N + 1) * 2);
+    let o = 0;
+    for (let j = 0; j <= GROUND_N; j++) for (let i = 0; i <= GROUND_N; i++) { v[o++] = i / GROUND_N; v[o++] = j / GROUND_N; }
+    const idx = new Uint32Array(GROUND_N * GROUND_N * 6);
+    o = 0;
+    for (let j = 0; j < GROUND_N; j++) for (let i = 0; i < GROUND_N; i++) {
+      const a = i + j * (GROUND_N + 1), b = a + 1, c = a + GROUND_N + 1, d = c + 1;
+      idx[o++] = a; idx[o++] = c; idx[o++] = b; idx[o++] = b; idx[o++] = c; idx[o++] = d;
+    }
+    groundVao = gl.createVertexArray();
+    gl.bindVertexArray(groundVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+    groundCount = idx.length;
+    gl.bindVertexArray(null);
+
+    bendTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, bendTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    for (const a of animals) {
+      a.tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, a.tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+  }
+
+  function setCommon(prog) {
+    const u = prog.u;
+    gl.uniform3fv(u.uCam, CAM);
+    gl.uniform3fv(u.uR, RIGHT);
+    gl.uniform3fv(u.uU, UP);
+    gl.uniform3fv(u.uF, FWD);
+    gl.uniform2f(u.uFocal, focalX, focalY);
+    if (u.uRes) gl.uniform2f(u.uRes, canvas.width, canvas.height);
+    if (u.uSun) gl.uniform3fv(u.uSun, SUN);
+  }
+
+  /* ---------- sizing and quality ---------- */
+
+  const DENSITY = 5800;     // blades per square unit at full quality
+  let quality = 1, renderScale = 1, bladeCount = 0, fullCount = 0, built = false;
+  function sizeCanvas() {
+    const w = Math.max(1, innerWidth), h = Math.max(1, innerHeight);
+    const px = Math.min(devicePixelRatio || 1, 1.5) * renderScale;
+    canvas.width = Math.max(2, Math.round(w * px));
+    canvas.height = Math.max(2, Math.round(h * px));
+  }
+
+  function sizeAll() {
+    fitView();
+    makeGrid();
+    const area = (field.halfNear + field.halfFar) * (field.zFar - field.zNear);
+    fullCount = Math.min(Math.round(area * DENSITY), 230000);
+    bladeCount = Math.round(fullCount * quality);
+    sizeCanvas();
+    for (const a of animals) {
+      if (a.state === 'gone') continue;
+      [a.x, a.z] = inField(a.x, a.z, .2);
+    }
+    if (built) buildBlades(fullCount);
+  }
+
+  /* ---------- frame ---------- */
+
+  let last = 0, clock = 0, raf = 0, slow = 0, counted = 0, warm = 0;
+
+  function frame(ms) {
+    raf = requestAnimationFrame(frame);
+    const now = ms / 1000;
+    const last0 = last;
+    const dt = Math.min(Math.max(now - last, 1e-3), .05);
+    last = now;
+    clock += dt * (reducedMotion ? .35 : 1);
+
+    blow(dt);
+    for (const a of animals) updateAnimal(a, dt);
+    relaxGrid(dt);
+
+    packGrid();
+    gl.bindTexture(gl.TEXTURE_2D, bendTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, grid.nx, grid.nz, 0, gl.RGBA, gl.FLOAT, grid.packed);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(.36, .45, .18, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+
+    const half = Math.max(field.halfNear, field.halfFar);
+    gl.useProgram(P.ground.p);
+    setCommon(P.ground);
+    gl.uniform4f(P.ground.u.uRect, -half, field.zNear, 2 * half, field.zFar - field.zNear);
+    gl.bindVertexArray(groundVao);
+    gl.drawElements(gl.TRIANGLES, groundCount, gl.UNSIGNED_INT, 0);
+
+    const g = P.grass;
+    gl.useProgram(g.p);
+    setCommon(g);
+    gl.uniform1f(g.u.uT, clock + 40);
+    gl.uniform1f(g.u.uWidth, 1 / Math.sqrt(quality));
+    gl.uniform4f(g.u.uGrid, grid.x0, grid.z0, (grid.nx - 1) * CELL, (grid.nz - 1) * CELL);
+    gl.uniform2f(g.u.uWind, WIND[0], WIND[1]);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, bendTex);
+    gl.uniform1i(g.u.uBend, 0);
+    gl.bindVertexArray(grassVao);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 12, bladeCount);
+    gl.bindVertexArray(null);
+
+    // Animals: flat cards standing in the grass, leaning a little toward you so they read clearly.
+    const m = P.animal;
+    gl.useProgram(m.p);
+    setCommon(m);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    const lift = [0, .55 + .45 * UP[1], .45 * UP[2]], ll = Math.hypot(...lift);
+    gl.uniform3f(m.u.uSide, 1, 0, 0);
+    gl.uniform3f(m.u.uLift, lift[0] / ll, lift[1] / ll, lift[2] / ll);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    for (const a of animals) {
+      if (a.state === 'gone') continue;
+      drawAnimal(a.ctx, a.kind, a);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, a.tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, a.canvas);
+      // Smaller copies keep thin lines like a cat's tail whole when the animal is drawn small.
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.uniform1i(m.u.uTex, 0);
+      gl.uniform3f(m.u.uPos, a.x, groundAt(a.x, a.z) + a.y, a.z);
+      gl.uniform1f(m.u.uSize, a.size);
+      gl.uniform1f(m.u.uFlip, a.face);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+
+    // Slower machines draw fewer, slightly wider blades, then fewer pixels.
+    // Judged on the average: a few doubled frames in every second read as stutter.
+    if (warm < 60) { warm++; return; }   // the first second includes one-time setup work
+    counted++;
+    slow += now - last0;
+    if (counted === 30) {
+      if (slow / 30 > .0182) {
+        if (renderScale > .75) { renderScale *= .87; sizeCanvas(); }
+        else if (quality > .45) { quality *= .82; bladeCount = Math.round(fullCount * quality); }
+        else if (renderScale > .5) { renderScale *= .87; sizeCanvas(); }
+      }
+      counted = slow = 0;
+    }
+  }
+
+  let pending = 0;
+  addEventListener('resize', () => {
+    clearTimeout(pending);
+    pending = setTimeout(sizeAll, 120);
+  });
+  document.addEventListener('visibilitychange', () => { last = performance.now() / 1000; counted = slow = 0; warm = 30; });
+  canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); cancelAnimationFrame(raf); });
+  canvas.addEventListener('webglcontextrestored', () => { build(); last = performance.now() / 1000; raf = requestAnimationFrame(frame); });
+
+  fitView();
+  makeGrid();
+  for (const k of ['rabbit', 'cat', 'dog', 'sheep', 'bird']) makeAnimal(k);
+  sizeAll();
+  build();
+  built = true;
+  last = performance.now() / 1000;
+  raf = requestAnimationFrame(frame);
+})();
+
+</script>
+</body>
+</html>
