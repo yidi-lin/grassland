@@ -1040,7 +1040,7 @@ function drawAnimal(c, kind, P) {
 
   /* ---------- frame ---------- */
 
-  let last = 0, clock = 0, raf = 0, slow = 0, counted = 0, warm = 0;
+  let last = 0, clock = 0, raf = 0, slow = 0, counted = 0, warm = 0, strikes = 0;
 
   function frame(ms) {
     raf = requestAnimationFrame(frame);
@@ -1124,7 +1124,10 @@ function drawAnimal(c, kind, P) {
     counted++;
     slow += now - last0;
     if (counted === 30) {
-      if (slow / 30 > .0182) {
+      // Only cut back after two slow half-seconds in a row, so a passing hitch doesn't thin the grass.
+      strikes = slow / 30 > .0182 ? strikes + 1 : 0;
+      if (strikes >= 2) {
+        strikes = 0;
         if (renderScale > .75) { renderScale *= .87; sizeCanvas(); }
         else if (quality > .45) { quality *= .82; bladeCount = Math.round(fullCount * quality); }
         else if (renderScale > .5) { renderScale *= .87; sizeCanvas(); }
